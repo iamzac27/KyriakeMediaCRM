@@ -257,46 +257,108 @@
     }
   }
 
+  // ---- Dropbox is the real photo storage; Supabase only ever stores the resulting links ----
+  var DROPBOX_APP_KEY = "s7zepyr2rekvtbd";
+
+  async function getDropboxAccessToken() {
+    var refreshToken = "";
+    try {
+      refreshToken = localStorage.getItem("kyriake_dropbox_refresh_token") || "";
+    } catch (_) {}
+    if (!refreshToken) return null;
+    var res = await fetch("https://api.dropboxapi.com/oauth2/token", {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken, client_id: DROPBOX_APP_KEY }).toString()
+    });
+    var data = await res.json();
+    if (!res.ok || !data.access_token) return null;
+    return data.access_token;
+  }
+
+  function dropboxGalleryFolder() {
+    var firstSeg = (galleryRow.address || "Untitled project").split(",")[0].replace(/[\/\\]+/g, "-");
+    return "/Kyriake Media/" + firstSeg + "/04 CLIENT GALLERY";
+  }
+
+  function toRawDropboxUrl(sharedUrl) {
+    return sharedUrl.split("?")[0] + "?raw=1";
+  }
+
+  async function getOrCreateSharedLink(token, path) {
+    var createRes = await fetch("https://api.dropboxapi.com/2/sharing/create_shared_link_with_settings", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: path })
+    });
+    var createData = await createRes.json();
+    if (createRes.ok && createData.url) return toRawDropboxUrl(createData.url);
+    // Link may already exist from a prior upload — look it up instead of failing.
+    var listRes = await fetch("https://api.dropboxapi.com/2/sharing/list_shared_links", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + token, "Content-Type": "application/json" },
+      body: JSON.stringify({ path: path, direct_only: true })
+    });
+    var listData = await listRes.json();
+    if (listRes.ok && listData.links && listData.links[0]) return toRawDropboxUrl(listData.links[0].url);
+    throw new Error("Could not get a shareable Dropbox link");
+  }
+
+  async function uploadOneToDropbox(token, file) {
+    var path = dropboxGalleryFolder() + "/" + Date.now() + "-" + file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+    var buffer = await file.arrayBuffer();
+    var upRes = await fetch("https://content.dropboxapi.com/2/files/upload", {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer " + token,
+        "Dropbox-API-Arg": JSON.stringify({ path: path, mode: "add", autorename: true, mute: false }),
+        "Content-Type": "application/octet-stream"
+      },
+      body: buffer
+    });
+    if (!upRes.ok) throw new Error("Dropbox upload failed");
+    var meta = await upRes.json();
+    return getOrCreateSharedLink(token, meta.path_display || path);
+  }
+
   el("fileInput").addEventListener("change", async function (e) {
     var files = Array.from(e.target.files || []);
     if (!files.length) return;
-    el("uploadStatus").textContent = "Uploading 0/" + files.length + "…";
+    el("uploadStatus").textContent = "Connecting to Dropbox…";
+    var token = await getDropboxAccessToken();
+    if (!token) {
+      el("uploadStatus").textContent = "Dropbox isn't connected — connect it from the CRM's Settings first.";
+      e.target.value = "";
+      return;
+    }
     var done = 0;
     for (var i = 0; i < files.length; i++) {
-      var file = files[i];
-      var path = galleryRow.id + "/" + Date.now() + "-" + file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      el("uploadStatus").textContent = "Uploading " + (done + 1) + "/" + files.length + " to Dropbox…";
       try {
-        var upRes = await fetch(SB_URL + "/storage/v1/object/gallery-photos/" + path, {
-          method: "POST",
-          headers: Object.assign({ "Content-Type": file.type || "application/octet-stream" }, authHeaders),
-          body: file
-        });
-        if (!upRes.ok) throw new Error("upload failed");
-        var publicUrl = SB_URL + "/storage/v1/object/public/gallery-photos/" + path;
+        var directUrl = await uploadOneToDropbox(token, files[i]);
         var insRes = await fetch(SB_URL + "/rest/v1/gallery_photos", {
           method: "POST",
           headers: Object.assign({ "Content-Type": "application/json", Prefer: "return=representation" }, authHeaders),
-          body: JSON.stringify({ gallery_id: galleryRow.id, url: publicUrl, sort_order: photos.length + i })
+          body: JSON.stringify({ gallery_id: galleryRow.id, url: directUrl, sort_order: photos.length + i })
         });
         if (insRes.ok) {
           var inserted = await insRes.json();
           photos.push(inserted[0]);
           if (!galleryRow.cover_photo_url) {
-            galleryRow.cover_photo_url = publicUrl;
+            galleryRow.cover_photo_url = directUrl;
             await fetch(SB_URL + "/rest/v1/galleries?id=eq." + galleryRow.id, {
               method: "PATCH",
               headers: Object.assign({ "Content-Type": "application/json" }, authHeaders),
-              body: JSON.stringify({ cover_photo_url: publicUrl })
+              body: JSON.stringify({ cover_photo_url: directUrl })
             });
           }
         }
       } catch (err) {
-        el("uploadStatus").textContent = "Some uploads failed. Try logging in again.";
+        el("uploadStatus").textContent = "Some uploads failed: " + (err && err.message ? err.message : "unknown error");
       }
       done++;
-      el("uploadStatus").textContent = "Uploading " + done + "/" + files.length + "…";
     }
-    el("uploadStatus").textContent = "Done.";
+    el("uploadStatus").textContent = "Done — uploaded to Dropbox.";
     renderCover();
     renderGrid();
     e.target.value = "";

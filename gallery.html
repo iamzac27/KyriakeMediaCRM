@@ -459,28 +459,31 @@
       if (!dlRes.ok) return;
       var blob = await dlRes.blob();
       var bitmap = await createImageBitmap(blob);
-      var targetW = 2000;
+      // 1600px is plenty for a full-bleed background behind the title —
+      // keeping it modest keeps this file small and quick to serve.
+      var targetW = 1600;
       var scale = Math.min(1, targetW / bitmap.width);
       var w = Math.max(1, Math.round(bitmap.width * scale));
       var h = Math.max(1, Math.round(bitmap.height * scale));
       var canvas = document.createElement("canvas");
       canvas.width = w; canvas.height = h;
       canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
-      var thumbBlob = await new Promise(function (res) { canvas.toBlob(res, "image/jpeg", 0.82); });
+      var thumbBlob = await new Promise(function (res) { canvas.toBlob(res, "image/jpeg", 0.78); });
       if (!thumbBlob) return;
-      var path = dropboxGalleryFolder() + "/COVER/cover-" + Date.now() + ".jpg";
-      var upRes = await fetch("https://content.dropboxapi.com/2/files/upload", {
+      // Store the compressed cover in Supabase Storage rather than as a
+      // Dropbox shared link — Dropbox's www.dropbox.com share links do a
+      // full redirect to a separate CDN host on every single load (roughly
+      // a extra second, regardless of file size), which is exactly the
+      // wrong tradeoff for the very first thing a client's browser has to
+      // fetch. Supabase Storage serves it directly, in one hop.
+      var storagePath = "covers/" + galleryRow.id + "/cover-" + Date.now() + ".jpg";
+      var upRes = await fetch(SB_URL + "/storage/v1/object/gallery-photos/" + storagePath, {
         method: "POST",
-        headers: {
-          Authorization: "Bearer " + token,
-          "Dropbox-API-Arg": JSON.stringify({ path: path, mode: "add", autorename: true, mute: true }),
-          "Content-Type": "application/octet-stream"
-        },
+        headers: Object.assign({ "Content-Type": "image/jpeg", "x-upsert": "true" }, authHeaders),
         body: thumbBlob
       });
       if (!upRes.ok) return;
-      var meta = await upRes.json();
-      var thumbUrl = await getOrCreateSharedLink(token, meta.path_display || path);
+      var thumbUrl = SB_URL + "/storage/v1/object/public/gallery-photos/" + storagePath;
       galleryRow.cover_thumb_url = thumbUrl;
       await fetch(SB_URL + "/rest/v1/galleries?id=eq." + galleryRow.id, {
         method: "PATCH",

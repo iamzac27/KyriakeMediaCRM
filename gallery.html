@@ -645,12 +645,41 @@
     if (!photos.length) return;
     var btn = el("downloadAllBtn");
     var original = btn.textContent;
-    for (var i = 0; i < photos.length; i++) {
-      btn.textContent = "DOWNLOADING " + (i + 1) + "/" + photos.length + "…";
-      triggerUrlDownload(photos[i].url);
-      await delay(500);
+    btn.disabled = true;
+    btn.textContent = "PREPARING YOUR DOWNLOAD…";
+    try {
+      var res = await fetch(
+        SB_URL + "/functions/v1/download-gallery-zip?slug=" + encodeURIComponent(slug),
+        { headers: { apikey: SB_ANON_KEY, Authorization: "Bearer " + SB_ANON_KEY } }
+      );
+      if (!res.ok) {
+        var errText = "";
+        try { errText = (await res.json()).error || ""; } catch (_) {}
+        throw new Error(errText || "Could not prepare the download (" + res.status + ")");
+      }
+      var blob = await res.blob();
+      var failedCount = Number(res.headers.get("X-Failed-Count") || 0);
+      var addressSlug = (galleryRow.address || "gallery").split(",")[0].replace(/[^a-zA-Z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "gallery";
+      var blobUrl = URL.createObjectURL(blob);
+      var a = document.createElement("a");
+      a.href = blobUrl;
+      a.download = addressSlug + "-Photos.zip";
+      a.rel = "noopener";
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function () { URL.revokeObjectURL(blobUrl); }, 30000);
+      btn.textContent = failedCount > 0 ? "DOWNLOADED (" + failedCount + " COULDN'T BE INCLUDED)" : original;
+    } catch (e) {
+      btn.textContent = "DOWNLOAD FAILED — TRY AGAIN";
+    } finally {
+      btn.disabled = false;
+      if (btn.textContent.indexOf("FAILED") === -1 && btn.textContent.indexOf("COULDN'T") === -1) {
+        setTimeout(function () { btn.textContent = original; }, 4000);
+      } else {
+        setTimeout(function () { btn.textContent = original; }, 6000);
+      }
     }
-    btn.textContent = original;
   };
 
   // ---- lightbox ----

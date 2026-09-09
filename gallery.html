@@ -4,7 +4,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Gallery</title>
-<script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { height: 100%; }
@@ -546,97 +545,41 @@
     return name;
   }
 
-  function triggerBlobDownload(blob, filename) {
-    var url = URL.createObjectURL(blob);
+  // Dropbox share links only trigger a real browser download (instead of
+  // just opening the image) when "dl=1" is set — "raw=1" (used for <img src>)
+  // is explicitly for inline display and does not.
+  function forceDownloadUrl(url) {
+    try {
+      var u = new URL(url);
+      u.searchParams.delete("raw");
+      u.searchParams.set("dl", "1");
+      return u.toString();
+    } catch (e) {
+      return url;
+    }
+  }
+
+  function triggerUrlDownload(url) {
     var a = document.createElement("a");
-    a.href = url;
-    a.download = filename;
+    a.href = forceDownloadUrl(url);
+    a.rel = "noopener";
     document.body.appendChild(a);
     a.click();
     a.remove();
-    setTimeout(function () { URL.revokeObjectURL(url); }, 4000);
   }
 
-  async function fetchAsBlob(url) {
-    var res = await fetch(url);
-    if (!res.ok) throw new Error("Could not fetch the photo");
-    return res.blob();
-  }
-
-  function blobToImageBitmap(blob) {
-    if (window.createImageBitmap) return createImageBitmap(blob);
-    return new Promise(function (resolve, reject) {
-      var img = new Image();
-      var url = URL.createObjectURL(blob);
-      img.onload = function () { URL.revokeObjectURL(url); resolve(img); };
-      img.onerror = reject;
-      img.src = url;
-    });
-  }
-
-  function canvasToBlob(canvas, quality) {
-    return new Promise(function (resolve) { canvas.toBlob(resolve, "image/jpeg", quality); });
-  }
-
-  async function build8MbBlob(photoUrl, onProgress) {
-    if (onProgress) onProgress("Fetching photo…");
-    var srcBlob = await fetchAsBlob(photoUrl);
-    var img = await blobToImageBitmap(srcBlob);
-    var w = img.width || img.naturalWidth;
-    var h = img.height || img.naturalHeight;
-    var canvas = document.createElement("canvas");
-    canvas.width = w;
-    canvas.height = h;
-    var ctx = canvas.getContext("2d");
-    ctx.drawImage(img, 0, 0, w, h);
-
-    if (galleryRow && galleryRow.logo_url) {
-      try {
-        if (onProgress) onProgress("Adding logo…");
-        var logoBlob = await fetchAsBlob(galleryRow.logo_url);
-        var logoImg = await blobToImageBitmap(logoBlob);
-        var lw0 = logoImg.width || logoImg.naturalWidth;
-        var lh0 = logoImg.height || logoImg.naturalHeight;
-        var maxW = w * 0.18;
-        var scale = Math.min(1, maxW / lw0);
-        var lw = lw0 * scale, lh = lh0 * scale;
-        var pad = w * 0.02;
-        ctx.drawImage(logoImg, w - lw - pad, h - lh - pad, lw, lh);
-      } catch (e) { /* logo optional — skip silently if it can't be fetched */ }
-    }
-
-    var target = 8 * 1024 * 1024;
-    var quality = 0.92;
-    if (onProgress) onProgress("Compressing…");
-    var blob = await canvasToBlob(canvas, quality);
-    while (blob.size > target && quality > 0.3) {
-      quality -= 0.08;
-      blob = await canvasToBlob(canvas, quality);
-    }
-    return blob;
-  }
+  function delay(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
 
   el("downloadAllBtn").onclick = async function () {
     if (!photos.length) return;
     var btn = el("downloadAllBtn");
     var original = btn.textContent;
-    try {
-      if (typeof JSZip === "undefined") throw new Error("Zip library did not load");
-      var zip = new JSZip();
-      for (var i = 0; i < photos.length; i++) {
-        btn.textContent = "ZIPPING " + (i + 1) + "/" + photos.length + "…";
-        var blob = await fetchAsBlob(photos[i].url);
-        zip.file(photoBaseName(photos[i], i) + ".jpg", blob);
-      }
-      btn.textContent = "PREPARING ZIP…";
-      var zipBlob = await zip.generateAsync({ type: "blob" });
-      var addr = (galleryRow.address || "gallery").split(",")[0].replace(/[^a-zA-Z0-9-_ ]/g, "").trim() || "gallery";
-      triggerBlobDownload(zipBlob, addr + ".zip");
-    } catch (err) {
-      alert("Could not build the download — " + (err && err.message ? err.message : "unknown error"));
-    } finally {
-      btn.textContent = original;
+    for (var i = 0; i < photos.length; i++) {
+      btn.textContent = "DOWNLOADING " + (i + 1) + "/" + photos.length + "…";
+      triggerUrlDownload(photos[i].url);
+      await delay(500);
     }
+    btn.textContent = original;
   };
 
   // ---- lightbox ----
@@ -674,26 +617,20 @@
     if (e.key === "ArrowRight") el("lbNext").click();
   });
 
-  el("lbDownloadFull").onclick = async function () {
+  el("lbDownloadFull").onclick = function () {
     if (lbIndex < 0 || !photos[lbIndex]) return;
+    triggerUrlDownload(photos[lbIndex].url);
     el("lbStatus").textContent = "Downloading full size…";
-    try {
-      var blob = await fetchAsBlob(photos[lbIndex].url);
-      triggerBlobDownload(blob, photoBaseName(photos[lbIndex], lbIndex) + ".jpg");
-      el("lbStatus").textContent = "Downloaded.";
-    } catch (err) {
-      el("lbStatus").textContent = "Could not download — " + (err && err.message ? err.message : "unknown error");
-    }
   };
 
-  el("lbDownload8").onclick = async function () {
+  el("lbDownload8").onclick = function () {
     if (lbIndex < 0 || !photos[lbIndex]) return;
-    try {
-      var blob = await build8MbBlob(photos[lbIndex].url, function (msg) { el("lbStatus").textContent = msg; });
-      triggerBlobDownload(blob, photoBaseName(photos[lbIndex], lbIndex) + "-8mb.jpg");
-      el("lbStatus").textContent = "Downloaded.";
-    } catch (err) {
-      el("lbStatus").textContent = "Could not download — " + (err && err.message ? err.message : "unknown error");
+    var p = photos[lbIndex];
+    if (p.url_8mb) {
+      triggerUrlDownload(p.url_8mb);
+      el("lbStatus").textContent = "Downloading 8 MB version…";
+    } else {
+      el("lbStatus").textContent = "The 8 MB version isn't ready for this photo yet.";
     }
   };
 

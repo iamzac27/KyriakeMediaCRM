@@ -221,6 +221,7 @@
     { key: "MESSAGES", label: "MESSAGES" }
   ];
   var currentTab = "FULL";
+  var viewingFull = false;
 
   function el(id) { return document.getElementById(id); }
 
@@ -338,7 +339,7 @@
 
   function renderStaffControls() {
     if (!isStaff) return;
-    var showUpload = currentTab === "FULL" || currentTab === "8MB";
+    var showUpload = viewingFull && (currentTab === "FULL" || currentTab === "8MB");
     el("uploadBar").style.display = showUpload ? "flex" : "none";
     var pub = el("publishToggle");
     pub.textContent = galleryRow.published ? "UNPUBLISH" : "PUBLISH";
@@ -373,6 +374,8 @@
     el("cover").style.display = "none";
     el("full").style.display = "block";
     el("tabBar").style.display = "flex";
+    viewingFull = true;
+    renderStaffControls();
   };
 
   var logoutBtn = el("logoutBtn");

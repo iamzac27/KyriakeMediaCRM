@@ -184,6 +184,30 @@
     Authorization: "Bearer " + (isStaff && accessToken ? accessToken : SB_ANON_KEY)
   };
 
+  async function refreshSbSession() {
+    var refreshToken = "";
+    try { refreshToken = localStorage.getItem("kyriake_sb_refresh_token") || ""; } catch (_) {}
+    if (!refreshToken) return false;
+    try {
+      var res = await fetch(SB_URL + "/auth/v1/token?grant_type=refresh_token", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", apikey: SB_ANON_KEY },
+        body: JSON.stringify({ refresh_token: refreshToken })
+      });
+      var data = await res.json();
+      if (!res.ok || !data.access_token) return false;
+      accessToken = data.access_token;
+      try {
+        localStorage.setItem("kyriake_sb_access_token", data.access_token);
+        if (data.refresh_token) localStorage.setItem("kyriake_sb_refresh_token", data.refresh_token);
+      } catch (_) {}
+      authHeaders = { apikey: SB_ANON_KEY, Authorization: "Bearer " + accessToken };
+      return true;
+    } catch (e) {
+      return false;
+    }
+  }
+
   var galleryRow = null;
   var photos = [];
   var messages = [];
@@ -325,6 +349,11 @@
     var res = await fetch(SB_URL + "/rest/v1/galleries?slug=eq." + encodeURIComponent(slug) + "&select=*", {
       headers: authHeaders
     });
+    if (res.status === 401 && isStaff && await refreshSbSession()) {
+      res = await fetch(SB_URL + "/rest/v1/galleries?slug=eq." + encodeURIComponent(slug) + "&select=*", {
+        headers: authHeaders
+      });
+    }
     var rows = await res.json();
     if (!res.ok || !rows || !rows.length) { showState("notfound"); return; }
     galleryRow = rows[0];

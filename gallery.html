@@ -282,7 +282,14 @@
   }
 
   function toRawDropboxUrl(sharedUrl) {
-    return sharedUrl.split("?")[0] + "?raw=1";
+    try {
+      var u = new URL(sharedUrl);
+      u.searchParams.delete("dl");
+      u.searchParams.set("raw", "1");
+      return u.toString();
+    } catch (e) {
+      return sharedUrl.split("?")[0] + "?raw=1";
+    }
   }
 
   async function getOrCreateSharedLink(token, path) {

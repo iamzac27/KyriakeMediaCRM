@@ -32,10 +32,19 @@
   /* full gallery */
   #full { display: none; }
   #full .headerRow { padding: 26px 22px 10px; text-align: center; }
-  #full .headerRow .addr { font-family: 'Playfair Display', Georgia, serif; font-size: 24px; font-weight: 500; }
+  #full .headerRow .eyebrow { font-size: 10px; letter-spacing: .2em; color: #8d8a83; font-weight: 500; }
+  #full .headerRow .addr { font-family: 'Playfair Display', Georgia, serif; font-size: 24px; font-weight: 500; margin-top: 2px; }
   #full .headerRow .sub { font-size: 12px; color: #6f6c66; margin-top: 4px; }
   #full .backBtn { display: block; margin: 0 auto 18px; border: 0; background: none; cursor: pointer; font: inherit; font-size: 11.5px; letter-spacing: .1em; color: #6f6c66; }
   #full .backBtn:hover { color: #111; }
+
+  #tabBar { display: flex; align-items: center; justify-content: center; gap: 4px; flex-wrap: wrap; padding: 4px 16px 20px; }
+  .tabBtn { display: flex; align-items: center; gap: 8px; border: 0; cursor: pointer; white-space: nowrap; border-radius: 22px; padding: 8px 15px; font: inherit; font-size: 10.5px; font-weight: 500; letter-spacing: .15em; background: transparent; color: #3a3833; }
+  .tabBtn.on { background: #e6e3dc; color: #111; }
+  .tabBtn .tabCount { font-size: 9.5px; letter-spacing: .04em; font-family: 'IBM Plex Mono', monospace; color: #6f6c66; background: rgba(17,17,17,.06); padding: 2px 5px; border-radius: 4px; }
+  .tabBtn.on .tabCount { background: #f4f2ee; }
+
+  #messagesPane { max-width: 560px; margin: 0 auto; padding: 10px 22px 70px; text-align: center; color: #6f6c66; font-size: 13px; }
   #grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 4px; padding: 0 4px 60px; }
   #grid .cell { position: relative; aspect-ratio: 4/3; overflow: hidden; background: #f1efe9; }
   #grid .cell img { width: 100%; height: 100%; object-fit: cover; display: block; }
@@ -84,12 +93,15 @@
 
   <div id="full">
     <div class="headerRow">
+      <div class="eyebrow">CLIENT GALLERY</div>
       <div class="addr" id="fullAddress"></div>
       <div class="sub" id="fullMeta"></div>
     </div>
     <button class="backBtn" id="backBtn">← BACK TO COVER</button>
+    <div id="tabBar"></div>
     <div id="grid"></div>
     <div id="empty" class="hidden">No photos uploaded yet.</div>
+    <div id="messagesPane" class="hidden">Messaging isn't set up for this gallery yet.</div>
   </div>
 
   <div id="uploadBar">
@@ -122,6 +134,15 @@
   var galleryRow = null;
   var photos = [];
 
+  var TABS = [
+    { key: "FULL", label: "FULL SIZE" },
+    { key: "8MB", label: "8 MB" },
+    { key: "FLOOR", label: "FLOOR PLANS" },
+    { key: "VIDEO", label: "VIDEO" },
+    { key: "MESSAGES", label: "MESSAGES" }
+  ];
+  var currentTab = "FULL";
+
   function el(id) { return document.getElementById(id); }
 
   function showState(name) {
@@ -149,10 +170,58 @@
     el("fullMeta").textContent = metaParts.join(" · ");
   }
 
+  function tabCount(key) {
+    return (key === "FULL" || key === "8MB") ? String(photos.length) : "";
+  }
+
+  function renderTabs() {
+    var bar = el("tabBar");
+    bar.innerHTML = "";
+    TABS.forEach(function (t) {
+      var on = t.key === currentTab;
+      var btn = document.createElement("button");
+      btn.className = "tabBtn" + (on ? " on" : "");
+      btn.appendChild(document.createTextNode(t.label));
+      var count = tabCount(t.key);
+      if (count) {
+        var span = document.createElement("span");
+        span.className = "tabCount";
+        span.textContent = count;
+        btn.appendChild(span);
+      }
+      btn.onclick = function () { currentTab = t.key; renderTabs(); renderGrid(); renderStaffControls(); };
+      bar.appendChild(btn);
+    });
+  }
+
   function renderGrid() {
     var grid = el("grid");
+    var emptyEl = el("empty");
+    var messagesEl = el("messagesPane");
     grid.innerHTML = "";
-    el("empty").classList.toggle("hidden", photos.length > 0);
+
+    if (currentTab === "MESSAGES") {
+      grid.classList.add("hidden");
+      emptyEl.classList.add("hidden");
+      messagesEl.classList.remove("hidden");
+      return;
+    }
+    messagesEl.classList.add("hidden");
+    grid.classList.remove("hidden");
+
+    if (currentTab === "FLOOR") {
+      emptyEl.textContent = "No floor plans uploaded yet.";
+      emptyEl.classList.remove("hidden");
+      return;
+    }
+    if (currentTab === "VIDEO") {
+      emptyEl.textContent = "No video uploaded yet.";
+      emptyEl.classList.remove("hidden");
+      return;
+    }
+
+    emptyEl.textContent = "No photos uploaded yet.";
+    emptyEl.classList.toggle("hidden", photos.length > 0);
     photos.forEach(function (p) {
       var cell = document.createElement("div");
       cell.className = "cell";
@@ -178,7 +247,8 @@
 
   function renderStaffControls() {
     if (!isStaff) return;
-    el("uploadBar").style.display = "flex";
+    var showUpload = currentTab === "FULL" || currentTab === "8MB";
+    el("uploadBar").style.display = showUpload ? "flex" : "none";
     var pub = el("publishToggle");
     pub.textContent = galleryRow.published ? "UNPUBLISH" : "PUBLISH";
     pub.onclick = togglePublish;
@@ -196,6 +266,7 @@
     });
     photos = pres.ok ? await pres.json() : [];
     renderCover();
+    renderTabs();
     renderGrid();
     renderStaffControls();
     renderStaffBar();

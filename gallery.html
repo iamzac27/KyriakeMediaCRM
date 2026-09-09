@@ -384,7 +384,7 @@
     renderStaffControls();
     renderStaffBar();
     showState("page");
-    if (isStaff && !galleryRow.cover_thumb_url && galleryRow.cover_photo_url) {
+    if (isStaff && !galleryRow.cover_thumb_url && photos.length) {
       var coverPhoto = photos.find(function (p) { return p.url === galleryRow.cover_photo_url; }) || photos[0];
       if (coverPhoto && coverPhoto.dropbox_path) buildCoverThumb(coverPhoto);
     }

@@ -22,7 +22,10 @@
 
   /* cover landing */
   #cover { position: relative; flex: 1; min-height: 480px; overflow: hidden; background: #111; }
-  #cover img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: .92; }
+  #cover.loading { background: linear-gradient(110deg, #15181a 8%, #23282a 18%, #15181a 33%); background-size: 200% 100%; animation: coverShimmer 1.6s ease-in-out infinite; }
+  @keyframes coverShimmer { to { background-position-x: -200%; } }
+  #cover img { width: 100%; height: 100%; object-fit: cover; display: block; opacity: 0; transition: opacity .5s ease; }
+  #cover img.loaded { opacity: .92; }
   #cover .scrim { position: absolute; inset: 0; background: linear-gradient(to bottom, rgba(0,0,0,.15), rgba(0,0,0,.1) 40%, rgba(0,0,0,.65)); }
   #cover .content { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; color: #fff; padding: 24px; gap: 26px; }
   #cover .address { font-family: 'Playfair Display', Georgia, serif; font-size: clamp(26px, 5vw, 52px); letter-spacing: .04em; font-weight: 500; text-transform: uppercase; text-shadow: 0 2px 18px rgba(0,0,0,.35); max-width: 900px; }
@@ -78,8 +81,8 @@
   /* lightbox */
   #lightbox { display: none; position: fixed; inset: 0; z-index: 999; background: rgba(10,10,10,.96); flex-direction: column; align-items: center; justify-content: center; }
   #lightbox.open { display: flex; }
-  #lbImgWrap { position: relative; flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; padding: 60px 70px 0; min-height: 0; }
-  #lbImg { max-width: 100%; max-height: 100%; object-fit: contain; display: block; }
+  #lbImgWrap { position: relative; flex: 1; width: 100%; display: flex; align-items: center; justify-content: center; padding: 60px 70px 0; min-height: 0; pointer-events: none; }
+  #lbImg { max-width: 100%; max-height: 100%; object-fit: contain; display: block; pointer-events: auto; }
   #lbClose { position: absolute; top: 18px; right: 22px; border: 0; background: none; cursor: pointer; color: #fff; font-size: 26px; line-height: 1; }
   #lbPrev, #lbNext { position: absolute; top: 50%; transform: translateY(-50%); border: 0; background: rgba(255,255,255,.1); color: #fff; cursor: pointer; font-size: 26px; width: 46px; height: 46px; border-radius: 50%; }
   #lbPrev:hover, #lbNext:hover { background: rgba(255,255,255,.22); }
@@ -243,7 +246,21 @@
     if (galleryRow.agent_name) metaParts.push(galleryRow.agent_name);
     if (galleryRow.agency) metaParts.push(galleryRow.agency);
     el("metaText").textContent = metaParts.join(" · ");
-    el("coverImg").src = galleryRow.cover_photo_url || (photos[0] ? photos[0].url : "");
+    var coverUrl = galleryRow.cover_thumb_url || galleryRow.cover_photo_url || (photos[0] ? photos[0].url : "");
+    var coverEl = el("cover"), img = el("coverImg");
+    img.classList.remove("loaded");
+    if (coverUrl && coverUrl !== img.src) {
+      coverEl.classList.add("loading");
+      var probe = new Image();
+      probe.onload = function () {
+        coverEl.classList.remove("loading");
+        img.classList.add("loaded");
+      };
+      probe.onerror = function () { coverEl.classList.remove("loading"); };
+      probe.src = coverUrl;
+    }
+    img.src = coverUrl;
+    if (!coverUrl) coverEl.classList.remove("loading");
     el("unpubBadge").classList.toggle("hidden", !!galleryRow.published);
     el("fullAddress").textContent = galleryRow.address || "";
     el("fullMeta").textContent = metaParts.join(" · ");
@@ -328,7 +345,7 @@
         var btn = document.createElement("button");
         btn.className = "setCoverBtn";
         btn.textContent = "SET AS COVER";
-        btn.onclick = function (e) { e.stopPropagation(); setCoverPhoto(p.url); };
+        btn.onclick = function (e) { e.stopPropagation(); setCoverPhoto(p); };
         cell.appendChild(btn);
       }
       cell.onclick = function () { openLightbox(idx); };
@@ -367,6 +384,10 @@
     renderStaffControls();
     renderStaffBar();
     showState("page");
+    if (isStaff && !galleryRow.cover_thumb_url && galleryRow.cover_photo_url) {
+      var coverPhoto = photos.find(function (p) { return p.url === galleryRow.cover_photo_url; }) || photos[0];
+      if (coverPhoto && coverPhoto.dropbox_path) buildCoverThumb(coverPhoto);
+    }
   }
 
   el("viewGalleryBtn").onclick = function () {
@@ -406,21 +427,68 @@
     }
   }
 
-  async function setCoverPhoto(url) {
+  async function setCoverPhoto(photo) {
+    var url = photo && photo.url ? photo.url : photo;
     el("uploadStatus").textContent = "Setting cover…";
     var res = await fetch(SB_URL + "/rest/v1/galleries?id=eq." + galleryRow.id, {
       method: "PATCH",
       headers: Object.assign({ "Content-Type": "application/json", Prefer: "return=representation" }, authHeaders),
-      body: JSON.stringify({ cover_photo_url: url })
+      body: JSON.stringify({ cover_photo_url: url, cover_thumb_url: null })
     });
     if (res.ok) {
       galleryRow.cover_photo_url = url;
+      galleryRow.cover_thumb_url = null;
       renderCover();
       renderGrid();
       el("uploadStatus").textContent = "Cover photo updated.";
+      if (photo && photo.dropbox_path) buildCoverThumb(photo);
     } else {
       el("uploadStatus").textContent = "Could not update. Try logging in again.";
     }
+  }
+
+  async function buildCoverThumb(photo) {
+    try {
+      if (!photo || !photo.dropbox_path) return;
+      var token = await getDropboxAccessToken();
+      if (!token) return;
+      var dlRes = await fetch("https://content.dropboxapi.com/2/files/download", {
+        method: "POST",
+        headers: { Authorization: "Bearer " + token, "Dropbox-API-Arg": JSON.stringify({ path: photo.dropbox_path }) }
+      });
+      if (!dlRes.ok) return;
+      var blob = await dlRes.blob();
+      var bitmap = await createImageBitmap(blob);
+      var targetW = 2000;
+      var scale = Math.min(1, targetW / bitmap.width);
+      var w = Math.max(1, Math.round(bitmap.width * scale));
+      var h = Math.max(1, Math.round(bitmap.height * scale));
+      var canvas = document.createElement("canvas");
+      canvas.width = w; canvas.height = h;
+      canvas.getContext("2d").drawImage(bitmap, 0, 0, w, h);
+      var thumbBlob = await new Promise(function (res) { canvas.toBlob(res, "image/jpeg", 0.82); });
+      if (!thumbBlob) return;
+      var path = dropboxGalleryFolder() + "/COVER/cover-" + Date.now() + ".jpg";
+      var upRes = await fetch("https://content.dropboxapi.com/2/files/upload", {
+        method: "POST",
+        headers: {
+          Authorization: "Bearer " + token,
+          "Dropbox-API-Arg": JSON.stringify({ path: path, mode: "add", autorename: true, mute: true }),
+          "Content-Type": "application/octet-stream"
+        },
+        body: thumbBlob
+      });
+      if (!upRes.ok) return;
+      var meta = await upRes.json();
+      var thumbUrl = await getOrCreateSharedLink(token, meta.path_display || path);
+      galleryRow.cover_thumb_url = thumbUrl;
+      await fetch(SB_URL + "/rest/v1/galleries?id=eq." + galleryRow.id, {
+        method: "PATCH",
+        headers: Object.assign({ "Content-Type": "application/json" }, authHeaders),
+        body: JSON.stringify({ cover_thumb_url: thumbUrl })
+      });
+      renderCover();
+    } catch (e) { /* best-effort — cover thumbnail is a nice-to-have, not required */ }
   }
 
   // ---- Dropbox is the real photo storage; Supabase only ever stores the resulting links ----
